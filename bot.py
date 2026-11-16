@@ -23,7 +23,7 @@ RAWG_KEY = os.getenv("RAWG_KEY", "fe3a305eb58d4cc8a84977c835cc7149")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 7977913545))
 BOT_LINK = os.getenv("BOT_LINK", "https://t.me/finders001_bot")
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/gamefinderoff_330")
-CHANNEL_ID = os.getenv("CHANNEL_ID", ) # ID канала для проверки (если нужно)
+CHANNEL_ID = os.getenv("CHANNEL_ID", "-1003728965844" ) # ID канала для проверки (если нужно)
 SECRET_PAYLOAD = os.getenv("SECRET_PAYLOAD",)
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", )
 
