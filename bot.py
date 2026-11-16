@@ -28,13 +28,14 @@ TOKEN = os.getenv("TOKEN", "9299858779:AAGTG2vjcBYXo0ypXO4TEiUuO9d43AqUrMQ")
 RAWG_KEY = os.getenv("RAWG_KEY", "fe3a305eb58d4cc8a84977c835cc7149")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 7977913545))
 BOT_LINK = os.getenv("BOT_LINK", "https://t.me/finders001_bot")
+SECRET_PAYLOAD = os.getenv("SECRET_PAYLOAD", "BER22PLL100RTk$$Errrtt")
 
 bot = Bot(TOKEN)
 dp = Dispatcher()
 
 
 # ==========================================
-# 🗄️ БАЗА ДАННЫХ
+# 🗄️ БАЗА ДАННЫХ (ЗАЩИЩЕННАЯ)
 # ==========================================
 def get_db():
     return sqlite3.connect("users.db", timeout=10)
@@ -43,18 +44,27 @@ def get_db():
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL;")
     cursor.execute(
-        "CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, joined_at TEXT, is_vip INTEGER DEFAULT 0, daily_searches INTEGER DEFAULT 0, last_search_date TEXT, ref_by INTEGER DEFAULT NULL, bonus_searches INTEGER DEFAULT 0, support_paid INTEGER DEFAULT 0)"
+        "CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, joined_at TEXT, is_vip INTEGER DEFAULT 0, vip_until TEXT DEFAULT NULL, daily_searches INTEGER DEFAULT 0, last_search_date TEXT, ref_by INTEGER DEFAULT NULL, ref_count INTEGER DEFAULT 0, bonus_searches INTEGER DEFAULT 0, lang TEXT DEFAULT 'ru', recs_enabled INTEGER DEFAULT 1)"
     )
     cursor.execute(
         "CREATE TABLE IF NOT EXISTS favorites (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, game_name TEXT, game_url TEXT)"
     )
     cursor.execute(
-        "CREATE TABLE IF NOT EXISTS search_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, genre TEXT, years TEXT, tag TEXT, searched_at TEXT)"
+        "CREATE TABLE IF NOT EXISTS search_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, genre TEXT, searched_at TEXT)"
     )
-    # Новая таблица для отзывов
     cursor.execute(
-        "CREATE TABLE IF NOT EXISTS feedback (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, username TEXT, text TEXT, date TEXT, is_paid INTEGER DEFAULT 0)"
+        "CREATE TABLE IF NOT EXISTS feedback (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, username TEXT, text TEXT, date TEXT)"
+    )
+    cursor.execute(
+        "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)"
+    )
+    cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('maintenance_until', '0')"
+    )
+    cursor.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('break_mode', '0')"
     )
     conn.commit()
     conn.close()
@@ -63,91 +73,103 @@ def init_db():
 init_db()
 
 
+def get_setting(key):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def set_setting(key, value):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE settings SET value = ? WHERE key = ?", (value, key))
+    conn.commit()
+    conn.close()
+
+
 def is_user_vip(user_id):
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT is_vip FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT is_vip, vip_until FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
-    return row and row[0] == 1
-
-
-def check_limit(user_id):
-    if is_user_vip(user_id):
-        return True, 999
-    conn = get_db()
-    cursor = conn.cursor()
-    today = datetime.now().strftime("%Y-%m-%d")
-    cursor.execute(
-        "SELECT daily_searches, last_search_date, bonus_searches FROM users WHERE user_id = ?",
-        (user_id,),
-    )
-    row = cursor.fetchone()
     if not row:
-        conn.close()
-        return True, 15
-
-    searches, last_date, bonuses = row
-    if last_date != today:
-        cursor.execute(
-            "UPDATE users SET daily_searches = 0, last_search_date = ? WHERE user_id = ?",
-            (today, user_id),
-        )
-        conn.commit()
-        searches = 0
-
-    total_available = 15 + bonuses - searches
-    if total_available <= 0:
-        conn.close()
-        return False, 0
-
-    cursor.execute(
-        "UPDATE users SET daily_searches = daily_searches + 1 WHERE user_id = ?",
-        (user_id,),
-    )
-    conn.commit()
-    conn.close()
-    return True, total_available - 1
+        return False
+    if row[0] == 1:
+        return True
+    if row[1]:
+        try:
+            until = datetime.strptime(row[1], "%Y-%m-%d %H:%M:%S")
+            if until > datetime.now():
+                return True
+        except:
+            pass
+    return False
 
 
 # ==========================================
-# 🛡️ АНТИ-СПАМ
+# 🛡️ БЕЗОПАСНОСТЬ И ПЕРЕРЫВЫ
 # ==========================================
-class AntiFloodMiddleware(BaseMiddleware):
-    def __init__(self, limit: float = 1.5):
-        self.limit = limit
+class SecurityMiddleware(BaseMiddleware):
+    def __init__(self):
         self.users: Dict[int, float] = {}
-        self.warnings: Dict[int, float] = {}
+        self.blocked: Dict[int, float] = {}
         super().__init__()
 
     async def __call__(
         self, handler, event: TelegramObject, data: Dict[str, Any]
     ) -> Any:
         user = data.get("event_from_user")
-        if not user or user.is_bot or user.id == ADMIN_ID:
+        if not user:
             return await handler(event, data)
 
+        # 1. Тех. обслуживание
+        maint_until = int(get_setting("maintenance_until") or 0)
+        if maint_until > time.time() and user.id != ADMIN_ID:
+            if isinstance(event, Message):
+                await event.answer(
+                    "🛠 <b>Бот на тех. обслуживании.</b>\nЗайди позже!",
+                    parse_mode="HTML",
+                )
+            elif isinstance(event, CallbackQuery):
+                await event.answer("🛠 На тех. обслуживании.", show_alert=True)
+            return
+
+        # 2. Обычный перерыв
+        break_mode = int(get_setting("break_mode") or 0)
+        if break_mode == 1 and user.id != ADMIN_ID:
+            if isinstance(event, Message):
+                await event.answer(
+                    "☕ <b>Я ушел на перерыв!</b>\nСкоро вернусь.", parse_mode="HTML"
+                )
+            return
+
+        # 3. Анти-спам
+        if user.is_bot or user.id == ADMIN_ID:
+            return await handler(event, data)
         now = time.time()
-        if now - self.users.get(user.id, 0) < self.limit:
-            if now - self.warnings.get(user.id, 0) > 5:
-                self.warnings[user.id] = now
-                try:
-                    if isinstance(event, Message):
-                        await event.answer("⏳ Не так быстро!")
-                    elif isinstance(event, CallbackQuery):
-                        await event.answer("⏳ Слишком часто!", show_alert=False)
-                except:
-                    pass
-                return
+        if user.id in self.blocked and now < self.blocked[user.id]:
+            return
+        if now - self.users.get(user.id, 0) < 0.5:
+            self.blocked[user.id] = now + 30
+            try:
+                if isinstance(event, Message):
+                    await event.answer("🚫 Ты заблокирован на 30 секунд за спам.")
+            except:
+                pass
+            return
         self.users[user.id] = now
         return await handler(event, data)
 
 
-dp.message.middleware(AntiFloodMiddleware(limit=1.5))
-dp.callback_query.middleware(AntiFloodMiddleware(limit=1.5))
+dp.message.middleware(SecurityMiddleware())
+dp.callback_query.middleware(SecurityMiddleware())
 
 # ==========================================
-# 🎮 ЖАНРЫ И МЕНЮ
+# 🎮 ЖАНРЫ
 # ==========================================
 GENRES = {
     "action": "Экшен",
@@ -162,6 +184,10 @@ GENRES = {
     "sports": "Спорт",
     "simulation": "Симулятор",
     "fighting": "Файтинг",
+    "arcade": "Аркада",
+    "platformer": "Платформер",
+    "family": "Семейная",
+    "massively-multiplayer": "MMO",
 }
 
 
@@ -170,47 +196,66 @@ async def set_commands():
         BotCommand(command="start", description="🏠 Главное меню"),
         BotCommand(command="find", description="🔍 Найти игру"),
         BotCommand(command="top", description="🏆 Топ игр"),
-        BotCommand(command="random", description="🎲 Рулетка (VIP)"),
-        BotCommand(command="shop", description="🛒 Купить VIP"),
+        BotCommand(command="game", description="🧩 Угадай игру"),
+        BotCommand(command="random", description="🎲 Рулетка"),
+        BotCommand(command="settings", description="⚙️ Настройки"),
+        BotCommand(command="shop", description="🛒 VIP"),
         BotCommand(command="support", description="💬 Поддержка"),
-        BotCommand(command="invite", description="🎁 Пригласить друга"),
     ]
     await bot.set_my_commands(commands)
 
 
 # ==========================================
-# 🚀 СТАРТ
+# 🚀 СТАРТ И РЕКОМЕНДАЦИИ
 # ==========================================
 @dp.message(Command("start"))
 async def start(m: Message):
-    try:
-        ref_by = None
-        args = m.text.split()
-        if len(args) > 1 and args[1].startswith("ref_"):
+    ref_by = None
+    args = m.text.split()
+    if len(args) > 1 and args[1].startswith("ref_"):
+        try:
             ref_by = int(args[1].split("_")[1])
+        except:
+            pass
 
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (m.from_user.id,))
-        if not cursor.fetchone():
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT user_id, recs_enabled FROM users WHERE user_id = ?", (m.from_user.id,)
+    )
+    user = cursor.fetchone()
+
+    if not user:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            "INSERT INTO users (user_id, username, first_name, joined_at, ref_by) VALUES (?, ?, ?, ?, ?)",
+            (m.from_user.id, m.from_user.username, m.from_user.first_name, now, ref_by),
+        )
+        conn.commit()
+        if ref_by:
             cursor.execute(
-                "INSERT INTO users (user_id, username, first_name, joined_at, ref_by) VALUES (?, ?, ?, ?, ?)",
-                (
-                    m.from_user.id,
-                    m.from_user.username,
-                    m.from_user.first_name,
-                    now,
-                    ref_by,
-                ),
+                "UPDATE users SET ref_count = ref_count + 1 WHERE user_id = ?",
+                (ref_by,),
             )
-            conn.commit()
-            if ref_by:
-                cursor.execute(
-                    "UPDATE users SET bonus_searches = bonus_searches + 10 WHERE user_id = ?",
-                    (ref_by,),
+            cursor.execute("SELECT ref_count FROM users WHERE user_id = ?", (ref_by,))
+            ref_count = cursor.fetchone()[0]
+            if ref_count % 3 == 0:
+                vip_until = (datetime.now() + timedelta(days=3)).strftime(
+                    "%Y-%m-%d %H:%M:%S"
                 )
-                conn.commit()
+                cursor.execute(
+                    "UPDATE users SET vip_until = ? WHERE user_id = ?",
+                    (vip_until, ref_by),
+                )
+                try:
+                    asyncio.create_task(
+                        bot.send_message(
+                            ref_by, "🎁 Ты пригласил 3 друзей! Тебе выдан VIP на 3 дня!"
+                        )
+                    )
+                except:
+                    pass
+            else:
                 try:
                     asyncio.create_task(
                         bot.send_message(
@@ -219,135 +264,209 @@ async def start(m: Message):
                     )
                 except:
                     pass
-        conn.close()
-
-        await m.answer(
-            "🎮 Привет! Я помогу найти игры.\n\n🔍 /find — Поиск\n🏆 /top — Топы\n🛒 /shop — VIP за 20⭐\n💬 /support — Поддержка"
-        )
-    except Exception as e:
-        logging.error(f"Ошибка в start: {e}")
-
-
-# ==========================================
-# 💳 ОПЛАТА И VIP
-# ==========================================
-@dp.message(Command("shop"))
-async def shop(m: Message):
-    if is_user_vip(m.from_user.id):
-        await m.answer(
-            "⭐ У тебя уже есть VIP! Доступно: безлимит, рулетка и избранное."
-        )
-        return
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Купить VIP за 20 ⭐", callback_data="buy_vip")]
-        ]
-    )
+            conn.commit()
+    conn.close()
     await m.answer(
-        "🛒 <b>VIP-Магазин</b>\n\n✅ Безлимит поисков (обычные: 15 в день)\n🎲 Рулетка\n❤️ Избранное\n\nЦена: <b>20 Звёзд</b>",
-        reply_markup=kb,
+        "🎮 <b>Привет!</b> Я помогу найти игры.\n➖➖➖➖➖\n🔍 /find — Поиск\n🏆 /top — Топы\n🧩 /game — Викторина\n🎲 /random — Рулетка\n⚙️ /settings — Настройки\n🛒 /shop — VIP\n➖➖➖➖➖",
         parse_mode="HTML",
     )
 
-
-@dp.callback_query(F.data == "buy_vip")
-async def send_invoice(cb: CallbackQuery):
-    prices = [LabeledPrice(label="VIP Доступ", amount=20)]
-    await cb.message.answer_invoice(
-        title="VIP Доступ",
-        description="Безлимит, Рулетка, Избранное",
-        payload="vip",
-        provider_token="",
-        currency="XTR",
-        prices=prices,
-    )
-    await cb.answer()
-
-
-@dp.pre_checkout_query()
-async def process_pre_checkout(q: PreCheckoutQuery):
-    await q.answer(ok=True)
-
-
-@dp.message(F.successful_payment)
-async def success_payment(m: Message):
-    payload = m.successful_payment.invoice_payload
+    # Умная рекомендация
     conn = get_db()
     cursor = conn.cursor()
-
-    if payload == "vip":
+    cursor.execute(
+        "SELECT recs_enabled FROM users WHERE user_id = ?", (m.from_user.id,)
+    )
+    if cursor.fetchone()[0] == 1:
         cursor.execute(
-            "UPDATE users SET is_vip = 1 WHERE user_id = ?", (m.from_user.id,)
+            "SELECT genre FROM search_logs WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+            (m.from_user.id,),
         )
-        conn.commit()
-        await m.answer("🎉 Оплата прошла! VIP активирован. Попробуй /random")
-    elif payload == "support":
-        cursor.execute(
-            "UPDATE users SET support_paid = 1 WHERE user_id = ?", (m.from_user.id,)
-        )
-        conn.commit()
-        await m.answer(
-            "✅ Спасибо за поддержку! Теперь напиши свой вопрос или предложение одним сообщением."
-        )
-
+        last_search = cursor.fetchone()
+        if last_search:
+            genre = last_search[0]
+            await m.answer(
+                f"👋 С возвращением! В прошлый раз ты искал {GENRES.get(genre, genre)}. Вот игра для тебя:"
+            )
+            await send_random_by_genre(m.chat.id, genre)
     conn.close()
 
 
 # ==========================================
-# 💬 ПОДДЕРЖКА РАЗРАБОТЧИКА (С ОТЗЫВАМИ)
+# ⚙️ НАСТРОЙКИ
 # ==========================================
-@dp.message(Command("support"))
-async def support(m: Message):
+@dp.message(Command("settings"))
+async def settings(m: Message):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT recs_enabled, lang FROM users WHERE user_id = ?", (m.from_user.id,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    status = "Вкл ✅" if row[0] else "Выкл ❌"
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="💬 Написать отзыв (Бесплатно)", callback_data="support_free"
+                    text=f"Рекомендации: {status}", callback_data="set_recs"
                 )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⭐ Поддержать и написать (2 ⭐)", callback_data="support_paid"
-                )
-            ],
+            ]
         ]
     )
     await m.answer(
-        "💬 <b>Поддержка</b>\n\nТы можешь просто написать отзыв, идею или жалобу. А можешь поддержать разработчика на 2 звезды, и твое сообщение будет в приоритете!",
+        "⚙️ <b>Настройки</b>\n➖➖➖➖➖\nЗдесь ты можешь отключить умные рекомендации.",
         reply_markup=kb,
         parse_mode="HTML",
     )
 
 
-@dp.callback_query(F.data == "support_free")
-async def support_free(cb: CallbackQuery):
-    admin_states[cb.from_user.id] = {"type": "feedback_free"}
-    await cb.message.edit_text("Напиши свой отзыв или идею одним сообщением:")
-    await cb.answer()
-
-
-@dp.callback_query(F.data == "support_paid")
-async def support_paid(cb: CallbackQuery):
-    prices = [LabeledPrice(label="Поддержка", amount=2)]
-    await cb.message.answer_invoice(
-        title="Поддержка разработчика",
-        description="Отправь 2 звезды и напиши свой вопрос/идею.",
-        payload="support",
-        provider_token="",
-        currency="XTR",
-        prices=prices,
+@dp.callback_query(F.data == "set_recs")
+async def toggle_recs(cb: CallbackQuery):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT recs_enabled FROM users WHERE user_id = ?", (cb.from_user.id,)
     )
+    val = 0 if cursor.fetchone()[0] else 1
+    cursor.execute(
+        "UPDATE users SET recs_enabled = ? WHERE user_id = ?", (val, cb.from_user.id)
+    )
+    conn.commit()
+    conn.close()
+    await cb.answer("Сохранено!")
+    await settings(cb.message)
+
+
+# ==========================================
+# 🧩 ИГРА "УГАДАЙ ИГРУ"
+# ==========================================
+active_games = {}
+
+
+@dp.message(Command("game"))
+async def start_game(m: Message):
+    await m.answer("🧩 <b>Загружаю случайную игру...</b>", parse_mode="HTML")
+    random_page = random.randint(1, 10)
+    params = {
+        "key": RAWG_KEY,
+        "page_size": 10,
+        "page": random_page,
+        "ordering": "-rating",
+        "exclude_adult": "true",
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.get("https://api.rawg.io/api/games", params=params) as r:
+            data = await r.json()
+
+    games = data.get("results", [])
+    if not games:
+        return await m.answer("Ошибка загрузки. Попробуй позже.")
+
+    target = random.choice(games)
+    name = target.get("name")
+    year = (target.get("released") or "?")[:4]
+    genre = target.get("genres", [{}])[0].get("name", "Неизвестно")
+
+    active_games[m.from_user.id] = {
+        "name": name,
+        "tries": 0,
+        "genre": genre,
+        "year": year,
+    }
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💡 Подсказка 1 (Жанр)", callback_data="hint:1"
+                )
+            ],
+            [InlineKeyboardButton(text="💡 Подсказка 2 (Год)", callback_data="hint:2")],
+            [
+                InlineKeyboardButton(
+                    text="💡 Подсказка 3 (Буква)", callback_data="hint:3"
+                )
+            ],
+            [InlineKeyboardButton(text="❌ Сдаться", callback_data="give_up")],
+        ]
+    )
+
+    await m.answer(
+        f"🧩 <b>Угадай игру!</b>\n\nЯ загадал известную игру. Напиши её название в чат!\n➖➖➖➖➖\n<i>Используй кнопки ниже, если нужна подсказка.</i>",
+        reply_markup=kb,
+        parse_mode="HTML",
+    )
+
+
+@dp.callback_query(F.data.startswith("hint:"))
+async def game_hint(cb: CallbackQuery):
+    level = int(cb.data.split(":")[1])
+    game_data = active_games.get(cb.from_user.id)
+    if not game_data:
+        return await cb.answer("Игра не найдена. Начни заново: /game", show_alert=True)
+
+    if level == 1:
+        await cb.answer(
+            f"Подсказка: Жанр этой игры - {game_data['genre']}", show_alert=True
+        )
+    elif level == 2:
+        await cb.answer(
+            f"Подсказка: Игра вышла в {game_data['year']} году.", show_alert=True
+        )
+    elif level == 3:
+        await cb.answer(
+            f"Подсказка: Название начинается на '{game_data['name'][0]}'",
+            show_alert=True,
+        )
+
+
+@dp.callback_query(F.data == "give_up")
+async def give_up(cb: CallbackQuery):
+    game_data = active_games.pop(cb.from_user.id, None)
+    if game_data:
+        await cb.message.edit_text(
+            f"🏳️ Ты сдался. Это была игра: <b>{game_data['name']}</b>",
+            parse_mode="HTML",
+        )
     await cb.answer()
 
 
 # ==========================================
-# 👑 VIP ФУНКЦИИ (РУЛЕТКА И ИЗБРАННОЕ)
+# 🎲 РУЛЕТКА
 # ==========================================
 @dp.message(Command("random"))
 async def random_game(m: Message):
+    conn = get_db()
+    cursor = conn.cursor()
+    today = datetime.now().strftime("%Y-%m-%d")
+    cursor.execute(
+        "SELECT daily_searches, last_search_date FROM users WHERE user_id = ?",
+        (m.from_user.id,),
+    )
+    searches, last_date = cursor.fetchone()
+
     if not is_user_vip(m.from_user.id):
-        await m.answer("❌ Только для VIP. Купи доступ в /shop.")
-        return
+        if last_date == today and searches >= 5:
+            await m.answer(
+                "❌ Лимит рулетки (5 раз в день) исчерпан. Купи VIP в /shop!"
+            )
+            conn.close()
+            return
+
+    if last_date != today:
+        cursor.execute(
+            "UPDATE users SET daily_searches = 1, last_search_date = ? WHERE user_id = ?",
+            (today, m.from_user.id),
+        )
+    else:
+        cursor.execute(
+            "UPDATE users SET daily_searches = daily_searches + 1 WHERE user_id = ?",
+            (m.from_user.id,),
+        )
+    conn.commit()
+    conn.close()
+
     await m.answer("🎲 Крутим рулетку...")
     random_page = random.randint(1, 50)
     params = {
@@ -362,80 +481,62 @@ async def random_game(m: Message):
             data = await r.json()
     games = data.get("results", [])
     if not games:
-        await m.answer("Рулетка заела, попробуй еще раз.")
-        return
+        return await m.answer("Рулетка заела.")
+
     g = random.choice(games)
-    name, year, rating = (
-        g.get("name"),
-        (g.get("released") or "?")[:4],
-        g.get("rating", 0),
-    )
+    name, year = g.get("name"), (g.get("released") or "?")[:4]
     url, img = f"https://rawg.io/games/{g.get('slug')}", g.get("background_image")
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="❤️ В избранное", callback_data=f"fav:{name}|{url}"
-                )
-            ]
-        ]
-    )
-    caption = f"🎲 <b>Твоя случайная игра:</b>\n\n🎮 <b>{name}</b> ({year})\n⭐ Рейтинг: {rating}\n🔗 <a href='{url}'>Страница</a>"
+    caption = f"🎲 <b>Твоя игра:</b>\n➖➖➖➖➖\n🎮 <b>{name}</b> ({year})\n🔗 <a href='{url}'>Страница</a>"
     if img:
-        await m.answer_photo(img, caption=caption, reply_markup=kb, parse_mode="HTML")
+        await m.answer_photo(img, caption=caption, parse_mode="HTML")
     else:
-        await m.answer(caption, reply_markup=kb, parse_mode="HTML")
+        await m.answer(caption, parse_mode="HTML")
 
 
-@dp.callback_query(F.data.startswith("fav:"))
-async def add_to_fav(cb: CallbackQuery):
-    if not is_user_vip(cb.from_user.id):
-        await cb.answer("❌ Только для VIP!", show_alert=True)
-        return
-    raw = cb.data.split(":", 1)[1]
-    name, url = raw.split("|", 1)
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO favorites (user_id, game_name, game_url) VALUES (?, ?, ?)",
-        (cb.from_user.id, name, url),
-    )
-    conn.commit()
-    conn.close()
-    await cb.answer("❤️ Добавлено в избранное!")
+async def send_random_by_genre(chat_id: int, genre: str):
+    params = {
+        "key": RAWG_KEY,
+        "genres": genre,
+        "page_size": 10,
+        "ordering": "-rating",
+        "exclude_adult": "true",
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.get("https://api.rawg.io/api/games", params=params) as r:
+            data = await r.json()
+    games = data.get("results", [])
+    if games:
+        g = random.choice(games)
+        url, img = f"https://rawg.io/games/{g.get('slug')}", g.get("background_image")
+        caption = f"🎮 <b>{g.get('name')}</b> ({(g.get('released') or '?')[:4]})\n🔗 <a href='{url}'>Страница</a>"
+        if img:
+            await bot.send_photo(chat_id, img, caption=caption, parse_mode="HTML")
+        else:
+            await bot.send_message(chat_id, caption, parse_mode="HTML")
 
 
 # ==========================================
-# 🔍 ПОИСК ПО ФИЛЬТРАМ
+# 🔍 ПОИСК
 # ==========================================
 @dp.message(Command("find"))
 async def find(m: Message):
-    allowed, left = check_limit(m.from_user.id)
-    if not allowed:
-        await m.answer(
-            "❌ Лимит исчерпан. Купи VIP в /shop или позови друга в /invite!"
-        )
-        return
-    if left < 900:
-        await m.answer(f"🔍 Осталось поисков: {left}")
     await ask_genre(m.chat.id)
 
-    async def ask_genre(chat_id: int):
-        items = list(GENRES.items())
 
-    rows = [
-        [InlineKeyboardButton(text=items[i][1], callback_data=f"genre:{items[i][0]}")]
-        + (
-            [
+async def ask_genre(chat_id: int):
+    items = list(GENRES.items())
+    rows = []
+    for i in range(0, len(items), 2):
+        row = [
+            InlineKeyboardButton(text=items[i][1], callback_data=f"genre:{items[i][0]}")
+        ]
+        if i + 1 < len(items):
+            row.append(
                 InlineKeyboardButton(
                     text=items[i + 1][1], callback_data=f"genre:{items[i+1][0]}"
                 )
-            ]
-            if i + 1 < len(items)
-            else []
-        )
-        for i in range(0, len(items), 2)
-    ]
+            )
+        rows.append(row)
     await bot.send_message(
         chat_id,
         "1️⃣ Выбери жанр:",
@@ -471,7 +572,7 @@ async def on_genre(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("year:"))
 async def on_year(cb: CallbackQuery):
     _, genre, years = cb.data.split(":")
-    await cb.message.edit_text(f"Ищу игры в жанре {genre} за {years}... ⏳")
+    await cb.message.edit_text(f"Ищу... ⏳")
     await cb.answer()
     await search_games(cb.message.chat.id, genre, years)
 
@@ -497,177 +598,124 @@ async def search_games(chat_id: int, genre: str, years: str):
 
     games = data.get("results", [])
     if not games:
-        await bot.send_message(chat_id, "😕 Ничего не нашлось.")
-        return
+        return await bot.send_message(chat_id, "😕 Ничего не нашлось.")
 
     for g in games:
         name, year = g.get("name"), (g.get("released") or "?")[:4]
         url, img = f"https://rawg.io/games/{g.get('slug')}", g.get("background_image")
-
-        kb = None
-        if is_user_vip(chat_id):
-            kb = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="❤️ В избранное", callback_data=f"fav:{name}|{url}"
-                        )
-                    ]
-                ]
-            )
-
         caption = f"🎮 <b>{name}</b> ({year})\n🔗 <a href='{url}'>Страница игры</a>"
         if img:
-            await bot.send_photo(
-                chat_id, img, caption=caption, reply_markup=kb, parse_mode="HTML"
-            )
+            await bot.send_photo(chat_id, img, caption=caption, parse_mode="HTML")
         else:
-            await bot.send_message(chat_id, caption, reply_markup=kb, parse_mode="HTML")
+            await bot.send_message(chat_id, caption, parse_mode="HTML")
 
 
 # ==========================================
-# 🏆 ТОП ИГР
+# ⚙️ АДМИН-ПАНЕЛЬ
 # ==========================================
-@dp.message(Command("top"))
-async def top(m: Message):
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🌎 Общий Топ-10", callback_data="top:all")],
-            [
-                InlineKeyboardButton(
-                    text="🎯 Топ по жанру", callback_data="top:choose_genre"
-                )
-            ],
-        ]
-    )
-    await m.answer("🏆 Какой Топ показать?", reply_markup=kb)
-
-
-@dp.callback_query(F.data == "top:choose_genre")
-async def top_genre_list(cb: CallbackQuery):
-    items = list(GENRES.items())
-    rows = [
-        [
-            InlineKeyboardButton(
-                text=items[i][1], callback_data=f"top_genre:{items[i][0]}"
-            )
-        ]
-        + (
-            [
-                InlineKeyboardButton(
-                    text=items[i + 1][1], callback_data=f"top_genre:{items[i+1][0]}"
-                )
-            ]
-            if i + 1 < len(items)
-            else []
-        )
-        for i in range(0, len(items), 2)
-    ]
-    await cb.message.edit_text(
-        "🏆 Выбери жанр для Топ-10:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-    )
-    await cb.answer()
-
-
-@dp.callback_query(F.data.startswith("top_genre:"))
-async def on_top_genre(cb: CallbackQuery):
-    genre = cb.data.split(":")[1]
-    await cb.message.edit_text("🏆 Загружаю...")
-    await cb.answer()
-    params = {
-        "key": RAWG_KEY,
-        "genres": genre,
-        "page_size": 30,
-        "ordering": "-rating",
-        "exclude_adult": "true",
-    }
-    await send_top_list(
-        cb.message, params, f"🏆 <b>Топ-10 в жанре «{GENRES[genre]}»:</b>"
-    )
-
-
-@dp.callback_query(F.data == "top:all")
-async def on_top_all(cb: CallbackQuery):
-    await cb.message.edit_text("🌎 Загружаю...")
-    await cb.answer()
-    params = {
-        "key": RAWG_KEY,
-        "page_size": 10,
-        "ordering": "-rating",
-        "dates": "2000-01-01,2026-12-31",
-        "exclude_adult": "true",
-    }
-    await send_top_list(cb.message, params, "🌎 <b>Общий Топ-10:</b>")
-
-
-async def send_top_list(message: Message, params: dict, title: str):
-    async with aiohttp.ClientSession() as s:
-        async with s.get("https://api.rawg.io/api/games", params=params) as r:
-            data = await r.json()
-    games = data.get("results", [])
-    if not games:
-        return await message.answer("😕 Ничего не нашлось.")
-
-    bad_words = ["hentai", "sex", "adult", "erotic", "nsfw", "porn"]
-    good_games = []
-    for g in games:
-        if any(w in g.get("name", "").lower() for w in bad_words):
-            continue
-        if g.get("background_image"):
-            good_games.append(g)
-        if len(good_games) == 10:
-            break
-
-    text = f"{title}\n\n"
-    for i, g in enumerate(good_games, 1):
-        text += f"{i}. <a href='https://rawg.io/games/{g.get('slug')}'>{g.get('name')}</a> ({(g.get('released') or '?')[:4]})\n"
-    await message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
-
-
-# ==========================================
-# ⚙️ АДМИН-ПАНЕЛЬ И РАССЫЛКА
-# ==========================================
-admin_states = {}
-
-
 @dp.message(Command("admin"))
 async def admin(m: Message):
     if m.from_user.id != ADMIN_ID:
         return
 
+    maint_until = int(get_setting("maintenance_until") or 0)
+    break_mode = int(get_setting("break_mode") or 0)
+
+    maint_status = "Выкл ✅" if maint_until < time.time() else "Вкл 🛠"
+    break_status = "Выкл ✅" if break_mode == 0 else "Вкл ☕"
+
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM users")
     total = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM users WHERE is_vip = 1")
-    vips = cursor.fetchone()[0]
     conn.close()
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
+                    text=f"🛠 Тех. обслуживание: {maint_status}",
+                    callback_data="admin_maint_menu",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"☕ Перерыв: {break_status}", callback_data="admin_break_menu"
+                )
+            ],
+            [InlineKeyboardButton(text="📬 Отзывы", callback_data="admin_feedback")],
+            [
+                InlineKeyboardButton(
                     text="⭐ Выдать себе VIP", callback_data="admin_give_vip"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📬 Отзывы и жалобы", callback_data="admin_feedback"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📢 Сделать рассылку", callback_data="admin_broadcast"
                 )
             ],
         ]
     )
     await m.answer(
-        f"📊 <b>АДМИН-ПАНЕЛЬ</b>\n\n👥 Юзеров: <b>{total}</b>\n⭐ VIP: <b>{vips}</b>",
+        f"📊 <b>АДМИН-ПАНЕЛЬ</b>\n➖➖➖➖➖\n👥 Юзеров: <b>{total}</b>",
         reply_markup=kb,
         parse_mode="HTML",
     )
+
+
+@dp.callback_query(F.data == "admin_maint_menu")
+async def admin_maint_menu(cb: CallbackQuery):
+    if cb.from_user.id != ADMIN_ID:
+        return
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🟢 Выключить ТО", callback_data="maint_0")],
+            [InlineKeyboardButton(text="🔴 На 1 час", callback_data="maint_1")],
+            [InlineKeyboardButton(text="🔴 На 1 день", callback_data="maint_24")],
+        ]
+    )
+    await cb.message.edit_text(
+        "🛠 <b>Режим тех. обслуживания:</b>", reply_markup=kb, parse_mode="HTML"
+    )
+    await cb.answer()
+
+
+@dp.callback_query(F.data.startswith("maint_"))
+async def set_maintenance(cb: CallbackQuery):
+    if cb.from_user.id != ADMIN_ID:
+        return
+    hours = int(cb.data.split("_")[1])
+    if hours == 0:
+        set_setting("maintenance_until", "0")
+    else:
+        set_setting("maintenance_until", str(int(time.time()) + (hours * 3600)))
+    await cb.answer("Обновлено!")
+    await admin(cb.message)
+
+
+@dp.callback_query(F.data == "admin_break_menu")
+async def admin_break_menu(cb: CallbackQuery):
+    if cb.from_user.id != ADMIN_ID:
+        return
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🟢 Выключить перерыв", callback_data="break_0"
+                )
+            ],
+            [InlineKeyboardButton(text="🟠 Включить перерыв", callback_data="break_1")],
+        ]
+    )
+    await cb.message.edit_text(
+        "☕ <b>Режим перерыва:</b>", reply_markup=kb, parse_mode="HTML"
+    )
+    await cb.answer()
+
+
+@dp.callback_query(F.data.startswith("break_"))
+async def set_break(cb: CallbackQuery):
+    if cb.from_user.id != ADMIN_ID:
+        return
+    val = cb.data.split("_")[1]
+    set_setting("break_mode", val)
+    await cb.answer("Обновлено!")
+    await admin(cb.message)
 
 
 @dp.callback_query(F.data == "admin_give_vip")
@@ -679,111 +727,7 @@ async def admin_vip(cb: CallbackQuery):
     cursor.execute("UPDATE users SET is_vip = 1 WHERE user_id = ?", (cb.from_user.id,))
     conn.commit()
     conn.close()
-    await cb.answer("✅ Тебе выдан VIP!", show_alert=True)
-
-
-# Кнопка просмотра отзывов
-@dp.callback_query(F.data == "admin_feedback")
-async def admin_feedback(cb: CallbackQuery):
-    if cb.from_user.id != ADMIN_ID:
-        return
-
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT user_id, username, text, date, is_paid FROM feedback ORDER BY id DESC LIMIT 10"
-    )
-    feedbacks = cursor.fetchall()
-    conn.close()
-
-    if not feedbacks:
-        await cb.message.answer("📬 Пока нет отзывов.")
-        await cb.answer()
-        return
-
-    text = "📬 <b>Последние 10 отзывов:</b>\n\n"
-    for f in feedbacks:
-        icon = "⭐" if f[4] == 1 else "💬"
-        text += f"{icon} <a href='tg://user?id={f[0]}'>{f[1] or 'Пользователь'}</a> ({f[3]}):\n{f[2]}\n\n"
-
-    await cb.message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
-    await cb.answer()
-
-
-@dp.callback_query(F.data == "admin_broadcast")
-async def admin_broadcast(cb: CallbackQuery):
-    if cb.from_user.id != ADMIN_ID:
-        return
-    admin_states[cb.from_user.id] = {"type": "broadcast"}
-    await cb.message.answer("Напиши текст для рассылки (или напиши 'отмена'):")
-    await cb.answer()
-
-
-# ==========================================
-# 📩 ОБРАБОТКА ТЕКСТА (РАССЫЛКА И ОТЗЫВЫ)
-# ==========================================
-@dp.message(F.text & ~F.text.startswith("/"))
-async def handle_text(m: Message):
-    # 1. Логика для Админа (рассылка)
-    if (
-        m.from_user.id == ADMIN_ID
-        and admin_states.get(ADMIN_ID, {}).get("type") == "broadcast"
-    ):
-        if m.text.lower() == "отмена":
-            admin_states[ADMIN_ID] = None
-            await m.answer("Рассылка отменена.")
-            return
-
-        admin_states[ADMIN_ID] = None
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id FROM users")
-        users = cursor.fetchall()
-        conn.close()
-
-        await m.answer(f"🚀 Рассылаю {len(users)} пользователям...")
-        count = 0
-        for u in users:
-            try:
-                await bot.send_message(u[0], m.text)
-                count += 1
-                await asyncio.sleep(0.05)
-            except:
-                pass
-        await m.answer(f"✅ Отправлено: {count} чел.")
-        return
-
-    # 2. Логика для Пользователей (отзывы)
-    state = admin_states.get(m.from_user.id, {})
-    if state.get("type") == "feedback_free" or state.get("type") == "feedback_paid":
-        # Сохраняем отзыв в базу
-        conn = get_db()
-        cursor = conn.cursor()
-        now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        is_paid = 1 if state.get("type") == "feedback_paid" else 0
-        cursor.execute(
-            "INSERT INTO feedback (user_id, username, text, date, is_paid) VALUES (?, ?, ?, ?, ?)",
-            (m.from_user.id, m.from_user.username, m.text, now, is_paid),
-        )
-        conn.commit()
-        conn.close()
-
-        # Удаляем состояние
-        admin_states[m.from_user.id] = None
-
-        await m.answer("✅ Спасибо! Твой отзыв отправлен разработчику.")
-
-        # Уведомляем тебя
-        try:
-            icon = "⭐ (Оплачено)" if is_paid else "💬 (Бесплатно)"
-            await bot.send_message(
-                ADMIN_ID,
-                f"📬 <b>Новый отзыв {icon}</b>\n\nОт: {m.from_user.first_name} (@{m.from_user.username})\nТекст:\n{m.text}",
-                parse_mode="HTML",
-            )
-        except:
-            pass
-        return
+    await cb.answer("✅ VIP выдан!", show_alert=True)
 
 
 # ==========================================
