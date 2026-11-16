@@ -18,12 +18,13 @@ from aiogram.types import (
 logging.basicConfig(level=logging.INFO)
 
 # ⚙️ НАСТРОЙКИ
-TOKEN = os.getenv("TOKEN", "9299858779:AAGTG2vjcBYXo0ypXO4TEiUuO9d43AqUrMQ")
+TOKEN = os.getenv("TOKEN", "9299858779:AAGTG2vjcBYXo0ypX04TEiUu09AqUrMW")
 RAWG_KEY = os.getenv("RAWG_KEY", "fe3a305eb58d4cc8a84977c835cc7149")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 7977913545))
-BOT_LINK = os.getenv("BOT_LINK", "https://t.me/finders001_bot")
-CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/gamefinderoff_330")
-SECRET_PAYLOAD = os.getenv("SECRET_PAYLOAD", )
+BOT_LINK = os.getenv("BOT_LINK", "https://t.me/твой_бот")
+CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/твой_канал")
+CHANNEL_ID = os.getenv("CHANNEL_ID", ) # ID канала для проверки (если нужно)
+SECRET_PAYLOAD = os.getenv("SECRET_PAYLOAD",)
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", )
 
 bot = Bot(TOKEN)
@@ -135,7 +136,7 @@ dp.message.middleware(SecurityMiddleware())
 dp.callback_query.middleware(SecurityMiddleware())
 
 # ==========================================
-# 🎮 ЖАНРЫ И МЕНЮ
+# 🎮 ЖАНРЫ И КОМАНДЫ
 # ==========================================
 GENRES = {
     "action": "⚔️ Экшен", "rpg": "🧙 РПГ", "shooter": "🔫 Шутер", "horror": "👻 Хоррор",
@@ -169,6 +170,7 @@ async def start(m: Message):
         cursor.execute("INSERT INTO users (user_id, username, first_name, joined_at) VALUES (?, ?, ?, ?)", (m.from_user.id, m.from_user.username, m.from_user.first_name, now))
         conn.commit()
     conn.close()
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📢 Наш канал", url=CHANNEL_LINK)]])
     await m.answer("🎮 <b>Привет!</b>\n➖➖➖➖➖➖➖➖\n🔍 /find — Поиск\n🏆 /top — Топы\n🧩 /game — Викторина\n🎲 /random — Рулетка\n⚙️ /settings — Настройки\n🛒 /shop — VIP", reply_markup=kb, parse_mode="HTML")
 
@@ -178,7 +180,7 @@ async def start(m: Message):
 @dp.message(Command("shop"))
 async def shop(m: Message):
     if is_user_vip(m.from_user.id): return await m.answer("⭐ У тебя уже есть VIP!")
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Купить за 20 ⭐", callback_data="buy_vip")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Купить за 20 ⭐", callback_data="buy_vip")], [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]])
     await m.answer("🛒 <b>VIP:</b> безлимит, рулетка, избранное.\nЦена: <b>20 ⭐</b>", reply_markup=kb, parse_mode="HTML")
 
 @dp.callback_query(F.data == "buy_vip")
@@ -258,17 +260,18 @@ async def random_game(m: Message):
     else: await m.answer(caption, reply_markup=kb, parse_mode="HTML")
 
 # ==========================================
-# 🏆 ТОП И ПОИСК (С ХОРРОРОМ)
+# 🏆 ТОП И ПОИСК (С ОТМЕНОЙ)
 # ==========================================
 @dp.message(Command("top"))
 async def top(m: Message):
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🌎 Общий", callback_data="top:all")], [InlineKeyboardButton(text="🎯 Жанр", callback_data="top:choose_genre")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🌎 Общий", callback_data="top:all")], [InlineKeyboardButton(text="🎯 Жанр", callback_data="top:choose_genre")], [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]])
     await m.answer("🏆 <b>Топ:</b>", reply_markup=kb, parse_mode="HTML")
 
 @dp.callback_query(F.data == "top:choose_genre")
 async def top_genre_list(cb: CallbackQuery):
     items = list(GENRES.items())
     rows = [[InlineKeyboardButton(text=items[i][1], callback_data=f"top_genre:{items[i][0]}")] + ([InlineKeyboardButton(text=items[i+1][1], callback_data=f"top_genre:{items[i+1][0]}")] if i + 1 < len(items) else []) for i in range(0, len(items), 2)]
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")])
     await cb.message.edit_text("🏆 <b>Жанр:</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
     await cb.answer()
 
@@ -300,13 +303,14 @@ async def send_top_list(message: Message, params: dict, title: str):
 async def find(m: Message):
     items = list(GENRES.items())
     rows = [[InlineKeyboardButton(text=items[i][1], callback_data=f"genre:{items[i][0]}")] + ([InlineKeyboardButton(text=items[i+1][1], callback_data=f"genre:{items[i+1][0]}")] if i + 1 < len(items) else []) for i in range(0, len(items), 2)]
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")])
     await m.answer("1️⃣ <b>Жанр:</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("genre:"))
 async def on_genre(cb: CallbackQuery):
     key = cb.data.split(":")[1]
     await cb.message.edit_text(f"Жанр: {GENRES[key]} ✅")
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="2010-2015", callback_data=f"year:{key}:2010-2015")], [InlineKeyboardButton(text="2021-2026", callback_data=f"year:{key}:2021-2026")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="2010-2015", callback_data=f"year:{key}:2010-2015")], [InlineKeyboardButton(text="2021-2026", callback_data=f"year:{key}:2021-2026")], [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]])
     await cb.message.answer("2️⃣ <b>Годы:</b>", reply_markup=kb, parse_mode="HTML")
     await cb.answer()
 
@@ -342,7 +346,7 @@ async def start_game(m: Message):
     if not games: return await m.answer("Ошибка.")
     g = random.choice(games)
     active_games[m.from_user.id] = {"name": g.get("name"), "genre": g.get("genres", [{}])[0].get("name", "?"), "year": (g.get("released") or "?")[:4]}
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💡 Жанр", callback_data="hint:1")], [InlineKeyboardButton(text="💡 Год", callback_data="hint:2")], [InlineKeyboardButton(text="❌ Сдаться", callback_data="give_up")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💡 Жанр", callback_data="hint:1")], [InlineKeyboardButton(text="💡 Год", callback_data="hint:2")], [InlineKeyboardButton(text="❌ Сдаться", callback_data="cancel")]])
     await m.answer(f"🧩 <b>Угадай игру!</b>\nПиши в чат!", reply_markup=kb, parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("hint:"))
@@ -350,6 +354,11 @@ async def game_hint(cb: CallbackQuery):
     gd = active_games.get(cb.from_user.id)
     if not gd: return await cb.answer("Начни заново: /game", show_alert=True)
     await cb.answer(f"Жанр: {gd['genre']}" if cb.data == "hint:1" else f"Год: {gd['year']}", show_alert=True)
+
+@dp.callback_query(F.data == "cancel")
+async def cancel_action(cb: CallbackQuery):
+    await cb.message.edit_text("❌ Действие отменено. Возвращайся в меню /start")
+    await cb.answer()
 
 @dp.callback_query(F.data == "give_up")
 async def give_up(cb: CallbackQuery):
@@ -367,7 +376,7 @@ async def settings(m: Message):
     cursor.execute("SELECT recs_enabled FROM users WHERE user_id = ?", (m.from_user.id,))
     status = "Вкл ✅" if cursor.fetchone()[0] else "Выкл ❌"
     conn.close()
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"Рекомендации: {status}", callback_data="set_recs")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"Рекомендации: {status}", callback_data="set_recs")], [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]])
     await m.answer("⚙️ <b>Настройки</b>", reply_markup=kb, parse_mode="HTML")
 
 @dp.callback_query(F.data == "set_recs")
@@ -389,7 +398,7 @@ admin_states = {}
 @dp.message(Command("support"))
 async def support(m: Message):
     active_feedback.add(m.from_user.id)
-    await m.answer("✍️ <b>Напиши отзыв:</b>", parse_mode="HTML")
+    await m.answer("✍️ <b>Напиши отзыв (или /cancel для отмены):</b>", parse_mode="HTML")
 
 @dp.message(Command("admin"))
 async def admin_login(m: Message):
@@ -452,14 +461,15 @@ async def show_admin_panel(m: Message):
         [InlineKeyboardButton(text=f"☕ Перерыв: {bs}", callback_data="admin_break_menu")],
         [InlineKeyboardButton(text="📬 Отзывы", callback_data="admin_feedback")],
         [InlineKeyboardButton(text="👑 Хэлперы", callback_data="admin_helpers_menu")],
-        [InlineKeyboardButton(text="⭐ Выдать VIP", callback_data="admin_give_vip")]
+        [InlineKeyboardButton(text="⭐ Выдать VIP", callback_data="admin_give_vip")],
+        [InlineKeyboardButton(text="❌ Выйти", callback_data="cancel")]
     ])
     await m.answer(f"📊 <b>АДМИНКА</b>\n👥 Юзеров: {total}", reply_markup=kb, parse_mode="HTML")
 
 @dp.callback_query(F.data == "admin_maint_menu")
 async def admin_maint_menu(cb: CallbackQuery):
     if cb.from_user.id != ADMIN_ID: return
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🟢 Выкл", callback_data="maint_0")], [InlineKeyboardButton(text="🔴 1 час", callback_data="maint_1")], [InlineKeyboardButton(text="🔴 1 день", callback_data="maint_24")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🟢 Выкл", callback_data="maint_0")], [InlineKeyboardButton(text="🔴 1 час", callback_data="maint_1")], [InlineKeyboardButton(text="🔴 1 день", callback_data="maint_24")], [InlineKeyboardButton(text="⬅ Назад", callback_data="admin_back")]])
     await cb.message.edit_text("🛠 <b>Режим ТО:</b>", reply_markup=kb, parse_mode="HTML")
     await cb.answer()
 
@@ -475,7 +485,7 @@ async def set_maintenance(cb: CallbackQuery):
 @dp.callback_query(F.data == "admin_break_menu")
 async def admin_break_menu(cb: CallbackQuery):
     if cb.from_user.id != ADMIN_ID: return
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🟢 Выкл", callback_data="break_0")], [InlineKeyboardButton(text="🟠 Вкл", callback_data="break_1")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🟢 Выкл", callback_data="break_0")], [InlineKeyboardButton(text="🟠 Вкл", callback_data="break_1")], [InlineKeyboardButton(text="⬅ Назад", callback_data="admin_back")]])
     await cb.message.edit_text("☕ <b>Перерыв:</b>", reply_markup=kb, parse_mode="HTML")
     await cb.answer()
 
@@ -505,7 +515,7 @@ async def admin_helpers_menu(cb: CallbackQuery):
     helpers = cursor.fetchall()
     conn.close()
     text = "👑 <b>Хэлперы:</b>\n" + "\n".join([f"@{h[1]} - <code>{h[0]}</code>" for h in helpers]) if helpers else "Пусто."
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="➕ Добавить", callback_data="admin_add_helper")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="➕ Добавить", callback_data="admin_add_helper")], [InlineKeyboardButton(text="⬅ Назад", callback_data="admin_back")]])
     await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await cb.answer()
 
@@ -514,6 +524,11 @@ async def admin_add_helper(cb: CallbackQuery):
     if cb.from_user.id != ADMIN_ID: return
     admin_states[cb.from_user.id] = "waiting_helper_id"
     await cb.message.answer("Отправь ID:")
+    await cb.answer()
+
+@dp.callback_query(F.data == "admin_back")
+async def admin_back(cb: CallbackQuery):
+    await show_admin_panel(cb.message)
     await cb.answer()
 
 @dp.callback_query(F.data == "admin_feedback")
