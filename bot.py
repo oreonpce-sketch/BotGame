@@ -24,8 +24,8 @@ from aiogram.types import (
 logging.basicConfig(level=logging.INFO)
 
 # ⚙️ НАСТРОЙКИ
-TOKEN = os.getenv("9299858779:AAGTG2vjcBYXo0ypXO4TEiUuO9d43AqUrMQ")
-RAWG_KEY = os.getenv("fe3a305eb58d4cc8a84977c835cc7149")
+TOKEN = os.getenv("TOKEN", "9299858779:AAGTG2vjcBYXo0ypXO4TEiUuO9d43AqUrMQ")
+RAWG_KEY = os.getenv("RAWG_KEY", "fe3a305eb58d4cc8a84977c835cc7149")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 7977913545))  # Твой ID
 BOT_LINK = os.getenv("BOT_LINK", "https://t.me/finders001_bot")
 
