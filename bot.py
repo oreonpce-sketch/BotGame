@@ -5,7 +5,7 @@ import time
 import random
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict
 
 from aiogram import Bot, Dispatcher, F, BaseMiddleware
@@ -23,7 +23,7 @@ from aiogram.types import (
 
 logging.basicConfig(level=logging.INFO)
 
-# ⚙️ НАСТРОЙКИ
+# ⚙️ НАСТРОЙКИ (ВПИШИ СВОИ ЗНАЧЕНИЯ В КАВЫЧКАХ, ЕСЛИ ЗАПУСКАЕШЬ НА ПК)
 TOKEN = os.getenv("TOKEN", "9299858779:AAGTG2vjcBYXo0ypXO4TEiUuO9d43AqUrMQ")
 RAWG_KEY = os.getenv("RAWG_KEY", "fe3a305eb58d4cc8a84977c835cc7149")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 7977913545))  # Твой ID
@@ -44,7 +44,7 @@ def init_db():
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute(
-        "CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, joined_at TEXT, is_vip INTEGER DEFAULT 0, daily_searches INTEGER DEFAULT 0, last_search_date TEXT, ref_by INTEGER DEFAULT NULL, bonus_searches INTEGER DEFAULT 0)"
+        "CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, joined_at TEXT, is_vip INTEGER DEFAULT 0, daily_searches INTEGER DEFAULT 0, last_search_date TEXT, ref_by INTEGER DEFAULT NULL, bonus_searches INTEGER DEFAULT 0, support_paid INTEGER DEFAULT 0)"
     )
     cursor.execute(
         "CREATE TABLE IF NOT EXISTS favorites (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, game_name TEXT, game_url TEXT)"
@@ -107,33 +107,77 @@ def check_limit(user_id):
 
 
 # ==========================================
-# 🛡️ АНТИ-СПАМ
+# 🛡️ АНТИ-СПАМ (Улучшенный)
 # ==========================================
 class AntiFloodMiddleware(BaseMiddleware):
     def __init__(self, limit: float = 1.5):
         self.limit = limit
         self.users: Dict[int, float] = {}
+        self.warnings: Dict[int, float] = {}
         super().__init__()
 
     async def __call__(
         self, handler, event: TelegramObject, data: Dict[str, Any]
     ) -> Any:
         user = data.get("event_from_user")
+        # Игнорируем ботов и админа (чтобы тебе не мешало тестировать)
         if not user or user.is_bot or user.id == ADMIN_ID:
             return await handler(event, data)
+
         now = time.time()
         if now - self.users.get(user.id, 0) < self.limit:
-            return
+            # Если спамит, раз в 5 секунд показываем предупреждение
+            if now - self.warnings.get(user.id, 0) > 5:
+                self.warnings[user.id] = now
+                try:
+                    if isinstance(event, Message):
+                        await event.answer("⏳ Не так быстро! Подожди немного.")
+                    elif isinstance(event, CallbackQuery):
+                        await event.answer("⏳ Слишком часто!", show_alert=False)
+                except:
+                    pass
+            return  # Блокируем запрос
         self.users[user.id] = now
         return await handler(event, data)
 
 
-dp.message.middleware(AntiFloodMiddleware())
-dp.callback_query.middleware(AntiFloodMiddleware())
+dp.message.middleware(AntiFloodMiddleware(limit=1.5))
+dp.callback_query.middleware(AntiFloodMiddleware(limit=1.5))
+
+# ==========================================
+# 🎮 ЖАНРЫ И МЕНЮ
+# ==========================================
+GENRES = {
+    "action": "Экшен",
+    "rpg": "РПГ",
+    "shooter": "Шутер",
+    "horror": "Хоррор",
+    "adventure": "Приключения",
+    "strategy": "Стратегия",
+    "indie": "Инди",
+    "puzzle": "Головоломки",
+    "racing": "Гонки",
+    "sports": "Спорт",
+    "simulation": "Симулятор",
+    "fighting": "Файтинг",
+}
+
+
+async def set_commands():
+    commands = [
+        BotCommand(command="start", description="🏠 Главное меню"),
+        BotCommand(command="find", description="🔍 Найти игру"),
+        BotCommand(command="top", description="🏆 Топ игр"),
+        BotCommand(command="random", description="🎲 Рулетка (VIP)"),
+        BotCommand(command="shop", description="🛒 Купить VIP"),
+        BotCommand(command="support", description="💬 Поддержка (2⭐)"),
+        BotCommand(command="invite", description="🎁 Пригласить друга"),
+    ]
+    await bot.set_my_commands(commands)
 
 
 # ==========================================
-# 🎮 КОМАНДЫ И СТАРТ
+# 🚀 СТАРТ
 # ==========================================
 @dp.message(Command("start"))
 async def start(m: Message):
@@ -176,62 +220,14 @@ async def start(m: Message):
         conn.close()
 
         await m.answer(
-            "🎮 Привет! Я помогу найти игры.\n\n🔍 /find — Поиск\n🏆 /top — Топы\n🛒 /shop — VIP за 20⭐\n🎁 /invite — Друзья"
+            "🎮 Привет! Я помогу найти игры.\n\n🔍 /find — Поиск\n🏆 /top — Топы\n🛒 /shop — VIP за 20⭐\n💬 /support — Поддержка"
         )
     except Exception as e:
         logging.error(f"Ошибка в start: {e}")
 
 
 # ==========================================
-# 🎯 УМНОЕ МЕНЮ (Выпадает при вводе /)
-# ==========================================
-async def set_commands():
-    commands = [
-        BotCommand(command="start", description="🏠 Главное меню"),
-        BotCommand(command="find", description="🔍 Найти игру"),
-        BotCommand(command="top", description="🏆 Топ игр"),
-        BotCommand(command="shop", description="🛒 Купить VIP"),
-        BotCommand(command="invite", description="🎁 Пригласить друга"),
-    ]
-    await bot.set_my_commands(commands)
-
-
-# ==========================================
-# 📩 ЕЖЕДНЕВНАЯ РАССЫЛКА (Удержание)
-# ==========================================
-async def daily_reminder():
-    while True:
-        # Ждем до 18:00 (или можно поменять на любой час)
-        now = datetime.now()
-        target_time = now.replace(hour=18, minute=0, second=0, microsecond=0)
-        if now >= target_time:
-            target_time += asyncio.timedelta(days=1)
-
-        wait_seconds = (target_time - now).total_seconds()
-        await asyncio.sleep(wait_seconds)
-
-        try:
-            conn = get_db()
-            cursor = conn.cursor()
-            cursor.execute("SELECT user_id FROM users")
-            users = cursor.fetchall()
-            conn.close()
-
-            for u in users:
-                try:
-                    await bot.send_message(
-                        u[0],
-                        "🎮 Хочешь найти ещё? Я тут! Напиши /find или загляни в /top",
-                    )
-                    await asyncio.sleep(0.1)  # Пауза, чтобы Telegram не забанил за спам
-                except:
-                    pass
-        except Exception as e:
-            logging.error(f"Ошибка рассылки: {e}")
-
-
-# ==========================================
-# 💳 ОПЛАТА И VIP (Цена 20)
+# 💳 ОПЛАТА И VIP
 # ==========================================
 @dp.message(Command("shop"))
 async def shop(m: Message):
@@ -273,16 +269,112 @@ async def process_pre_checkout(q: PreCheckoutQuery):
 
 @dp.message(F.successful_payment)
 async def success_payment(m: Message):
+    payload = m.successful_payment.invoice_payload
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET is_vip = 1 WHERE user_id = ?", (m.from_user.id,))
-    conn.commit()
+
+    if payload == "vip":
+        cursor.execute(
+            "UPDATE users SET is_vip = 1 WHERE user_id = ?", (m.from_user.id,)
+        )
+        conn.commit()
+        await m.answer("🎉 Оплата прошла! VIP активирован. Попробуй /random")
+    elif payload == "support":
+        # Помечаем, что пользователь оплатил поддержку (теперь он может писать)
+        cursor.execute(
+            "UPDATE users SET support_paid = 1 WHERE user_id = ?", (m.from_user.id,)
+        )
+        conn.commit()
+        await m.answer(
+            "✅ Спасибо за поддержку! Теперь напиши свой вопрос или предложение одним сообщением, и я передам его разработчику."
+        )
+
     conn.close()
-    await m.answer("🎉 Оплата прошла! VIP активирован. Попробуй /random")
 
 
 # ==========================================
-# 👑 VIP И ПОИСК ПО ФИЛЬТРАМ
+# 💬 ПОДДЕРЖКА РАЗРАБОТЧИКА (2 ЗВЕЗДЫ)
+# ==========================================
+@dp.message(Command("support"))
+async def support(m: Message):
+    prices = [LabeledPrice(label="Поддержка", amount=2)]
+    await m.answer_invoice(
+        title="Поддержка разработчика",
+        description="Отправь 2 звезды и напиши свой вопрос/идею разработчику.",
+        payload="support",
+        provider_token="",
+        currency="XTR",
+        prices=prices,
+    )
+
+
+# ==========================================
+# 👑 VIP ФУНКЦИИ (РУЛЕТКА И ИЗБРАННОЕ)
+# ==========================================
+@dp.message(Command("random"))
+async def random_game(m: Message):
+    if not is_user_vip(m.from_user.id):
+        await m.answer("❌ Только для VIP. Купи доступ в /shop.")
+        return
+    await m.answer("🎲 Крутим рулетку...")
+    random_page = random.randint(1, 50)
+    params = {
+        "key": RAWG_KEY,
+        "page_size": 10,
+        "page": random_page,
+        "ordering": "-rating",
+        "exclude_adult": "true",
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.get("https://api.rawg.io/api/games", params=params) as r:
+            data = await r.json()
+    games = data.get("results", [])
+    if not games:
+        await m.answer("Рулетка заела, попробуй еще раз.")
+        return
+    g = random.choice(games)
+    name, year, rating = (
+        g.get("name"),
+        (g.get("released") or "?")[:4],
+        g.get("rating", 0),
+    )
+    url, img = f"https://rawg.io/games/{g.get('slug')}", g.get("background_image")
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="❤️ В избранное", callback_data=f"fav:{name}|{url}"
+                )
+            ]
+        ]
+    )
+    caption = f"🎲 <b>Твоя случайная игра:</b>\n\n🎮 <b>{name}</b> ({year})\n⭐ Рейтинг: {rating}\n🔗 <a href='{url}'>Страница</a>"
+    if img:
+        await m.answer_photo(img, caption=caption, reply_markup=kb, parse_mode="HTML")
+    else:
+        await m.answer(caption, reply_markup=kb, parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("fav:"))
+async def add_to_fav(cb: CallbackQuery):
+    if not is_user_vip(cb.from_user.id):
+        await cb.answer("❌ Только для VIP!", show_alert=True)
+        return
+    raw = cb.data.split(":", 1)[1]
+    name, url = raw.split("|", 1)
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO favorites (user_id, game_name, game_url) VALUES (?, ?, ?)",
+        (cb.from_user.id, name, url),
+    )
+    conn.commit()
+    conn.close()
+    await cb.answer("❤️ Добавлено в избранное!")
+
+
+# ==========================================
+# 🔍 ПОИСК ПО ФИЛЬТРАМ
 # ==========================================
 @dp.message(Command("find"))
 async def find(m: Message):
@@ -298,25 +390,31 @@ async def find(m: Message):
 
 
 async def ask_genre(chat_id: int):
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
+    items = list(GENRES.items())
+    rows = [
+        [InlineKeyboardButton(text=items[i][1], callback_data=f"genre:{items[i][0]}")]
+        + (
             [
-                InlineKeyboardButton(text="Хоррор", callback_data="genre:horror"),
-                InlineKeyboardButton(text="Экшен", callback_data="genre:action"),
-            ],
-            [
-                InlineKeyboardButton(text="РПГ", callback_data="genre:rpg"),
-                InlineKeyboardButton(text="Шутер", callback_data="genre:shooter"),
-            ],
-        ]
+                InlineKeyboardButton(
+                    text=items[i + 1][1], callback_data=f"genre:{items[i+1][0]}"
+                )
+            ]
+            if i + 1 < len(items)
+            else []
+        )
+        for i in range(0, len(items), 2)
+    ]
+    await bot.send_message(
+        chat_id,
+        "1️⃣ Выбери жанр:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
-    await bot.send_message(chat_id, "1️⃣ Выбери жанр:", reply_markup=kb)
 
 
 @dp.callback_query(F.data.startswith("genre:"))
 async def on_genre(cb: CallbackQuery):
     key = cb.data.split(":")[1]
-    await cb.message.edit_text(f"Жанр: {key} ✅")
+    await cb.message.edit_text(f"Жанр: {GENRES[key]} ✅")
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -373,11 +471,26 @@ async def search_games(chat_id: int, genre: str, years: str):
     for g in games:
         name, year = g.get("name"), (g.get("released") or "?")[:4]
         url, img = f"https://rawg.io/games/{g.get('slug')}", g.get("background_image")
+
+        kb = None
+        if is_user_vip(chat_id):
+            kb = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="❤️ В избранное", callback_data=f"fav:{name}|{url}"
+                        )
+                    ]
+                ]
+            )
+
         caption = f"🎮 <b>{name}</b> ({year})\n🔗 <a href='{url}'>Страница игры</a>"
         if img:
-            await bot.send_photo(chat_id, img, caption=caption, parse_mode="HTML")
+            await bot.send_photo(
+                chat_id, img, caption=caption, reply_markup=kb, parse_mode="HTML"
+            )
         else:
-            await bot.send_message(chat_id, caption, parse_mode="HTML")
+            await bot.send_message(chat_id, caption, reply_markup=kb, parse_mode="HTML")
 
 
 # ==========================================
@@ -400,19 +513,28 @@ async def top(m: Message):
 
 @dp.callback_query(F.data == "top:choose_genre")
 async def top_genre_list(cb: CallbackQuery):
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Хоррор", callback_data="top_genre:horror"),
-                InlineKeyboardButton(text="Экшен", callback_data="top_genre:action"),
-            ],
-            [
-                InlineKeyboardButton(text="РПГ", callback_data="top_genre:rpg"),
-                InlineKeyboardButton(text="Шутер", callback_data="top_genre:shooter"),
-            ],
+    items = list(GENRES.items())
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=items[i][1], callback_data=f"top_genre:{items[i][0]}"
+            )
         ]
+        + (
+            [
+                InlineKeyboardButton(
+                    text=items[i + 1][1], callback_data=f"top_genre:{items[i+1][0]}"
+                )
+            ]
+            if i + 1 < len(items)
+            else []
+        )
+        for i in range(0, len(items), 2)
+    ]
+    await cb.message.edit_text(
+        "🏆 Выбери жанр для Топ-10:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
-    await cb.message.edit_text("Выбери жанр:", reply_markup=kb)
     await cb.answer()
 
 
@@ -428,7 +550,9 @@ async def on_top_genre(cb: CallbackQuery):
         "ordering": "-rating",
         "exclude_adult": "true",
     }
-    await send_top_list(cb.message, params, f"🏆 <b>Топ-10 в жанре «{genre}»:</b>")
+    await send_top_list(
+        cb.message, params, f"🏆 <b>Топ-10 в жанре «{GENRES[genre]}»:</b>"
+    )
 
 
 @dp.callback_query(F.data == "top:all")
@@ -470,8 +594,11 @@ async def send_top_list(message: Message, params: dict, title: str):
 
 
 # ==========================================
-# ⚙️ УЛЬТИМАТИВНАЯ АДМИН-ПАНЕЛЬ
+# ⚙️ АДМИН-ПАНЕЛЬ И РАССЫЛКА
 # ==========================================
+admin_states = {}
+
+
 @dp.message(Command("admin"))
 async def admin(m: Message):
     if m.from_user.id != ADMIN_ID:
@@ -522,17 +649,27 @@ async def admin_vip(cb: CallbackQuery):
 async def admin_broadcast(cb: CallbackQuery):
     if cb.from_user.id != ADMIN_ID:
         return
+    admin_states[cb.from_user.id] = "waiting_for_broadcast"
     await cb.message.answer("Напиши текст для рассылки (или напиши 'отмена'):")
     await cb.answer()
 
 
+# ==========================================
+# 📩 ОБРАБОТКА ТЕКСТА (РАССЫЛКА И ПОДДЕРЖКА)
+# ==========================================
 @dp.message(F.text & ~F.text.startswith("/"))
-async def handle_broadcast(m: Message):
-    if m.from_user.id != ADMIN_ID or m.text == "отмена":
-        return
+async def handle_text(m: Message):
+    # 1. Логика для Админа (рассылка)
+    if (
+        m.from_user.id == ADMIN_ID
+        and admin_states.get(ADMIN_ID) == "waiting_for_broadcast"
+    ):
+        if m.text.lower() == "отмена":
+            admin_states[ADMIN_ID] = None
+            await m.answer("Рассылка отменена.")
+            return
 
-    # Простая проверка, что админ хочет сделать рассылку (можно усложнить, но пока так)
-    if "привет" in m.text.lower() or len(m.text) > 5:
+        admin_states[ADMIN_ID] = None
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute("SELECT user_id FROM users")
@@ -549,6 +686,37 @@ async def handle_broadcast(m: Message):
             except:
                 pass
         await m.answer(f"✅ Отправлено: {count} чел.")
+        return
+
+    # 2. Логика для Пользователей (поддержка)
+    # Проверяем, оплатил ли он поддержку (support_paid == 1)
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT support_paid FROM users WHERE user_id = ?", (m.from_user.id,)
+    )
+    row = cursor.fetchone()
+
+    if row and row[0] == 1:
+        # Если оплатил, пересылаем сообщение тебе и сбрасываем флаг, чтобы не спамил
+        try:
+            await bot.send_message(
+                ADMIN_ID,
+                f"💬 <b>Сообщение от {m.from_user.first_name} (@{m.from_user.username}):</b>\n\n{m.text}",
+                parse_mode="HTML",
+            )
+            await m.answer(
+                "✅ Твое сообщение отправлено разработчику! Спасибо за поддержку."
+            )
+
+            # Сбрасываем, чтобы он не мог слать бесконечно
+            cursor.execute(
+                "UPDATE users SET support_paid = 0 WHERE user_id = ?", (m.from_user.id,)
+            )
+            conn.commit()
+        except:
+            pass
+    conn.close()
 
 
 # ==========================================
@@ -556,8 +724,7 @@ async def handle_broadcast(m: Message):
 # ==========================================
 async def main():
     logging.info("Бот запускается...")
-    await set_commands()  # Включаем умное меню
-    asyncio.create_task(daily_reminder())  # Запускаем фоновую рассылку
+    await set_commands()
     await dp.start_polling(bot)
 
 
