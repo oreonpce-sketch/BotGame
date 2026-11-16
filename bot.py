@@ -23,7 +23,7 @@ RAWG_KEY = os.getenv("RAWG_KEY", "ВСТАВЬ_КЛЮЧ")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 123456789))
 BOT_LINK = os.getenv("BOT_LINK", "https://t.me/твой_бот")
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/твой_канал")
-SECRET_PAYLOAD = os.getenv("SECRET_PAYLOAD", "SUPER_SECRET_VIP_2026")
+SECRET_PAYLOAD = os.getenv("SECRET_PAYLOAD",)
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
 bot = Bot(TOKEN)
