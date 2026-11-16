@@ -18,11 +18,11 @@ from aiogram.types import (
 logging.basicConfig(level=logging.INFO)
 
 # ⚙️ НАСТРОЙКИ
-TOKEN = os.getenv("TOKEN", "ВСТАВЬ_ТОКЕН")
-RAWG_KEY = os.getenv("RAWG_KEY", "ВСТАВЬ_КЛЮЧ")
-ADMIN_ID = int(os.getenv("ADMIN_ID", 123456789))
-BOT_LINK = os.getenv("BOT_LINK", "https://t.me/твой_бот")
-CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/твой_канал")
+TOKEN = os.getenv("TOKEN", "9299858779:AAGTG2vjcBYXo0ypXO4TEiUuO9d43AqUrMQ")
+RAWG_KEY = os.getenv("RAWG_KEY", "fe3a305eb58d4cc8a84977c835cc7149")
+ADMIN_ID = int(os.getenv("ADMIN_ID", 7977913545))
+BOT_LINK = os.getenv("BOT_LINK", "https://t.me/finders001_bot")
+CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/gamefinderoff_330")
 SECRET_PAYLOAD = os.getenv("SECRET_PAYLOAD", )
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", )
 
