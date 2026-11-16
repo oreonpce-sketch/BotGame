@@ -28,7 +28,7 @@ TOKEN = os.getenv("TOKEN", "9299858779:AAGTG2vjcBYXo0ypXO4TEiUuO9d43AqUrMQ")
 RAWG_KEY = os.getenv("RAWG_KEY", "fe3a305eb58d4cc8a84977c835cc7149")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 7977913545))
 BOT_LINK = os.getenv("BOT_LINK", "https://t.me/finders001_bot")
-SECRET_PAYLOAD = os.getenv("SECRET_PAYLOAD", "BER22PLL100RTk$$Errrtt")
+SECRET_PAYLOAD = os.getenv("SECRET_PAYLOAD")
 
 bot = Bot(TOKEN)
 dp = Dispatcher()
