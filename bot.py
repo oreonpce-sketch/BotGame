@@ -20,10 +20,10 @@ from aiogram.exceptions import TelegramBadRequest
 # ⚙️ НАСТРОЙКИ 
 # ==========================================
 # Если запускаешь на Railway, оставь os.getenv. Если на ПК, впиши токены в кавычки.
-TOKEN = os.getenv("TOKEN", "ВСТАВЬ_ТОКЕН_ЕСЛИ_ЗАПУСКАЕШЬ_ЛОКАЛЬНО")
-RAWG_KEY = os.getenv("RAWG_KEY", "ВСТАВЬ_КЛЮЧ_RAWG")
-ADMIN_ID = 123456789  # <--- ТВОЙ ID ЦИФРАМИ
-BOT_LINK = "https://t.me/твой_бот"  
+TOKEN = os.getenv("TOKEN", "9299858779:AAGTG2vjcBYXo0ypXO4TEiUuO9d43AqUrMQ")
+RAWG_KEY = os.getenv("RAWG_KEY", "fe3a305eb58d4cc8a84977c835cc7149")
+ADMIN_ID = 7977913545  # <--- ТВОЙ ID ЦИФРАМИ
+BOT_LINK = "https://t.me/finders001_bot"  
 # ==========================================
 
 # Включаем логирование, чтобы видеть ошибки в терминале/Railway
@@ -223,7 +223,7 @@ async def start(m: Message):
             "🛒 /shop — Купить VIP",
             reply_markup=kb, parse_mode="HTML"
         )
-        except Exception as e:
+    except Exception as e:
         logging.error(f"Ошибка в start: {e}")
 
 # ==========================================
